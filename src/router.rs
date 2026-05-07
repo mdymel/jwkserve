@@ -206,21 +206,20 @@ impl ServerState {
                 trust_forwarded_headers,
             } => {
                 let host = if *trust_forwarded_headers {
-                    match Self::first_header_value(headers, "x-forwarded-host")? {
+                    match Self::first_forwarded_value(headers, "host")? {
                         Some(host) => host,
-                        None => Self::first_header_value(headers, "host")?.ok_or(IssuerError)?,
+                        None => match Self::first_header_value(headers, "x-forwarded-host")? {
+                            Some(host) => host,
+                            None => Self::first_header_value(headers, "host")?.ok_or(IssuerError)?,
+                        },
                     }
                 } else {
                     Self::first_header_value(headers, "host")?.ok_or(IssuerError)?
                 };
 
-                let scheme = if *trust_forwarded_headers {
-                    match Self::first_header_value(headers, "x-forwarded-proto")? {
-                        Some(proto) => proto,
-                        None => scheme.to_string(),
-                    }
-                } else {
-                    scheme.to_string()
+                let scheme = match Self::request_scheme(headers)? {
+                    Some(proto) => proto,
+                    None => scheme.to_string(),
                 };
 
                 let host = Self::validate_host(&host)?;
@@ -242,6 +241,55 @@ impl ServerState {
             "issuer": issuer,
             "jwks_uri": format!("{issuer}/.well-known/jwks.json"),
         }))
+    }
+
+    fn request_scheme(headers: &HeaderMap) -> Result<Option<String>, IssuerError> {
+        if let Some(proto) = Self::first_forwarded_value(headers, "proto")? {
+            return Ok(Some(proto));
+        }
+
+        if let Some(proto) = Self::first_header_value(headers, "x-forwarded-proto")? {
+            return Ok(Some(proto));
+        }
+
+        if let Some(scheme) = Self::first_header_value(headers, "x-forwarded-scheme")? {
+            return Ok(Some(scheme));
+        }
+
+        match Self::first_header_value(headers, "x-forwarded-ssl")? {
+            Some(value) if value.eq_ignore_ascii_case("on") => Ok(Some("https".to_string())),
+            _ => Ok(None),
+        }
+    }
+
+    fn first_forwarded_value(headers: &HeaderMap, name: &str) -> Result<Option<String>, IssuerError> {
+        let Some(value) = headers.get("forwarded") else {
+            return Ok(None);
+        };
+
+        let value = value.to_str().map_err(|_| IssuerError)?;
+        let Some(first_entry) = value.split(',').next() else {
+            return Ok(None);
+        };
+
+        for part in first_entry.split(';') {
+            let Some((key, value)) = part.split_once('=') else {
+                continue;
+            };
+
+            if !key.trim().eq_ignore_ascii_case(name) {
+                continue;
+            }
+
+            let value = value.trim().trim_matches('"');
+            if value.is_empty() {
+                return Ok(None);
+            }
+
+            return Ok(Some(value.to_string()));
+        }
+
+        Ok(None)
     }
 
     fn first_header_value(headers: &HeaderMap, name: &str) -> Result<Option<String>, IssuerError> {
@@ -576,10 +624,11 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("host", "internal.local".parse().unwrap());
         headers.insert(
-            "x-forwarded-host",
-            "tenant-a.test, proxy.local".parse().unwrap(),
+            "forwarded",
+            "proto=https;host=tenant-a.test, proto=http;host=proxy.local"
+                .parse()
+                .unwrap(),
         );
-        headers.insert("x-forwarded-proto", "https, http".parse().unwrap());
 
         assert_eq!(
             state.issuer_for_headers(&headers).unwrap(),
@@ -596,6 +645,19 @@ mod tests {
         assert_eq!(
             state.issuer_for_headers(&headers).unwrap(),
             "https://tenant-c.test"
+        );
+    }
+
+    #[test]
+    fn test_dynamic_issuer_uses_forwarded_proto_without_trusted_host_headers() {
+        let state = dynamic_state("http", false);
+        let mut headers = HeaderMap::new();
+        headers.insert("host", "tenant-a.test".parse().unwrap());
+        headers.insert("x-forwarded-proto", "https".parse().unwrap());
+
+        assert_eq!(
+            state.issuer_for_headers(&headers).unwrap(),
+            "https://tenant-a.test"
         );
     }
 
@@ -646,7 +708,9 @@ mod tests {
         assert!(state
             .cached_html
             .contains("jwksLink.href = `${endpointOrigin}/.well-known/jwks.json`;"));
-        assert!(state.cached_html.contains("if (!IS_DYNAMIC_ISSUER) {"));
+        assert!(state
+            .cached_html
+            .contains("if (!IS_DYNAMIC_ISSUER || typeof issuer !== 'string') {"));
         assert!(state
             .cached_html
             .contains("function shouldStripDynamicIssuer(issuer) {"));

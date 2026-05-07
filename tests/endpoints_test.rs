@@ -101,6 +101,30 @@ async fn test_openid_discovery_endpoint_dynamic_forwarded_headers() {
 }
 
 #[tokio::test]
+async fn test_openid_discovery_endpoint_dynamic_forwarded_proto_without_host_trust() {
+    let server = TestServer::spawn_dynamic(2048, vec![KeySignAlgorithm::RS256], "http", false)
+        .await
+        .expect("Failed to spawn server");
+
+    let config = server
+        .fetch_openid_config_with_headers(&[
+            ("host", "tenant-secure.test"),
+            ("x-forwarded-proto", "https"),
+        ])
+        .await
+        .expect("Failed to fetch OpenID config");
+
+    assert_eq!(
+        config.get("issuer").expect("Missing issuer field"),
+        "https://tenant-secure.test"
+    );
+    assert_eq!(
+        config.get("jwks_uri").expect("Missing jwks_uri field"),
+        "https://tenant-secure.test/.well-known/jwks.json"
+    );
+}
+
+#[tokio::test]
 async fn test_openid_discovery_endpoint_dynamic_forwarded_headers_first_value() {
     let server = TestServer::spawn_dynamic(2048, vec![KeySignAlgorithm::RS256], "http", true)
         .await

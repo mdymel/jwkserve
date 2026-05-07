@@ -102,10 +102,10 @@ fn resolve_issuer_mode(args: &ArgsServe) -> color_eyre::Result<(IssuerMode, Stri
             trust_forwarded_headers,
         },
         format!(
-            "with issuer derived from request host using scheme {}{}",
+            "with issuer derived from request host using request scheme hints (fallback {}){}",
             scheme,
             if trust_forwarded_headers {
-                " and trusted forwarded headers"
+                " and trusted forwarded host headers"
             } else {
                 ""
             }
@@ -268,7 +268,7 @@ mod tests {
 
         assert_eq!(
             listen_log,
-            "with issuer derived from request host using scheme http"
+            "with issuer derived from request host using request scheme hints (fallback http)"
         );
         match issuer_mode {
             IssuerMode::FromHost {
