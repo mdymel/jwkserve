@@ -1,8 +1,9 @@
-FROM alpine:3.23.4 AS builder
+FROM alpine:3.23.5 AS builder
 
 ARG TARGETARCH
 
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
       build-base \
       ca-certificates \
       cargo \
@@ -13,9 +14,9 @@ RUN apk add --no-cache \
 WORKDIR /app
 COPY . .
 
-RUN --mount=type=cache,target=/root/.cargo/registry \
-    --mount=type=cache,target=/root/.cargo/git \
-    --mount=type=cache,target=/app/target \
+# Keep Cargo locks with the cache and isolate compiled output by architecture.
+RUN --mount=type=cache,id=jwkserve-cargo-${TARGETARCH},target=/root/.cargo,sharing=locked \
+    --mount=type=cache,id=jwkserve-target-${TARGETARCH},target=/app/target,sharing=locked \
     set -eux; \
     case "$TARGETARCH" in \
       arm64) prebuilt_binary="target/aarch64-unknown-linux-musl/release/jwkserve" ;; \
@@ -33,9 +34,10 @@ RUN --mount=type=cache,target=/root/.cargo/registry \
     fi; \
     chmod +x /tmp/jwkserve
 
-FROM alpine:3.23.4 AS default
+FROM alpine:3.24.1 AS default
 
-RUN apk add --no-cache \
+RUN apk upgrade --no-cache && \
+    apk add --no-cache \
       ca-certificates \
       libgcc \
       libstdc++
